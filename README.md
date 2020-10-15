@@ -14,3 +14,6 @@ Filters available for each EventMessage.Type:
 * STATUS_SERVICE: String representing full name of Service class, e.g. ra.i2p.I2PService
 * STATUS_BUS: No filters supported
 * TEXT: Can filter by name if provided.
+
+## Roadmap
+* Currently supports synchronous callback notifications; needs to support asynchronous updates by propagating events to registered service operations.
