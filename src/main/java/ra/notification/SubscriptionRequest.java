@@ -1,7 +1,7 @@
 package ra.notification;
 
-import ra.common.EventMessage;
-import ra.common.Subscription;
+import ra.common.messaging.EventMessage;
+import ra.common.notification.Subscription;
 
 /**
  * Request a subscription to future publications providing an optional filter.
