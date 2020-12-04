@@ -50,6 +50,10 @@ public class NotificationService extends BaseService {
 
     private Map<String, Map<String, List<Subscription>>> subscriptions;
 
+    public NotificationService() {
+        super();
+    }
+
     public NotificationService(MessageProducer producer, ServiceStatusObserver observer) {
         super(producer, observer);
     }
