@@ -7,7 +7,7 @@ import ra.common.notification.Subscription;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
 import ra.common.service.ServiceStatus;
-import ra.common.service.ServiceStatusListener;
+import ra.common.service.ServiceStatusObserver;
 
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -50,8 +50,8 @@ public class NotificationService extends BaseService {
 
     private Map<String, Map<String, List<Subscription>>> subscriptions;
 
-    public NotificationService(MessageProducer producer, ServiceStatusListener serviceStatusListener) {
-        super(producer, serviceStatusListener);
+    public NotificationService(MessageProducer producer, ServiceStatusObserver observer) {
+        super(producer, observer);
     }
 
     @Override
