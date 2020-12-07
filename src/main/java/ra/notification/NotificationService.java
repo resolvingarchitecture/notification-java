@@ -3,7 +3,10 @@ package ra.notification;
 import ra.common.*;
 import ra.common.messaging.EventMessage;
 import ra.common.messaging.MessageProducer;
+import ra.common.notification.ClientSubscription;
+import ra.common.notification.ServiceSubscription;
 import ra.common.notification.Subscription;
+import ra.common.notification.SubscriptionRequest;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
 import ra.common.service.ServiceStatus;
@@ -48,6 +51,7 @@ public class NotificationService extends BaseService {
 
     private ExecutorService pool = Executors.newFixedThreadPool(4);
 
+    // Type, Filter, Subscription
     private Map<String, Map<String, List<Subscription>>> subscriptions;
 
     public NotificationService() {
@@ -80,26 +84,26 @@ public class NotificationService extends BaseService {
     }
 
     private void subscribe(Envelope e) {
-        LOG.fine("Received subscribe request...");
-        SubscriptionRequest r = (SubscriptionRequest)DLC.getData(SubscriptionRequest.class,e);
-        LOG.fine("Subscription for type: "+r.getType().name());
-        Map<String, List<Subscription>> s = subscriptions.get(r.getType().name());
-        if(r.getFilter() == null) {
-            LOG.fine("With no filters.");
+        LOG.info("Received subscribe request...");
+        SubscriptionRequest r = (SubscriptionRequest) DLC.getData(SubscriptionRequest.class, e);
+        LOG.info("Subscription for type: " + r.getEventMessageType().name());
+        Map<String, List<Subscription>> s = subscriptions.get(r.getEventMessageType().name());
+        if (r.getFilter() == null) {
+            LOG.info("With no filters.");
             s.get("|").add(r.getSubscription());
         } else {
-            LOG.fine("With filter: "+r.getFilter());
-            if(s.get(r.getFilter()) == null)
+            LOG.info("With filter: " + r.getFilter());
+            if (s.get(r.getFilter()) == null)
                 s.put(r.getFilter(), new ArrayList<>());
             s.get(r.getFilter()).add(r.getSubscription());
         }
-        LOG.fine("Subscription added.");
+        LOG.info("Subscription added.");
     }
 
     private void unsubscribe(Envelope e) {
         LOG.info("Received unsubscribe request...");
         SubscriptionRequest r = (SubscriptionRequest)DLC.getData(SubscriptionRequest.class,e);
-        Map<String, List<Subscription>> s = subscriptions.get(r.getType().name());
+        Map<String, List<Subscription>> s = subscriptions.get(r.getEventMessageType().name());
         if(r.getFilter() == null) {
             s.get("|").remove(r.getSubscription());
         } else {
@@ -109,31 +113,35 @@ public class NotificationService extends BaseService {
     }
 
     private void publish(final Envelope e) {
-        LOG.fine("Received publish request...");
+        LOG.info("Received publish request...");
         EventMessage m = (EventMessage)e.getMessage();
-        LOG.fine("For type: "+m.getType());
+        LOG.info("For type: "+m.getType());
         Map<String, List<Subscription>> s = subscriptions.get(m.getType());
         if(s == null || s.size() == 0) {
-            LOG.fine("No subscriptions for type: "+m.getType());
+            LOG.info("No subscriptions for type: "+m.getType());
             return;
         }
         final List<Subscription> subs = s.get("|");
         if(subs == null || subs.size() == 0) {
-            LOG.fine("No subscriptions without filters.");
+            LOG.info("No subscriptions without filters.");
         } else {
-            LOG.fine("Notify all "+subs.size()+" unfiltered subscriptions.");
+            LOG.info("Notify all "+subs.size()+" unfiltered subscriptions.");
             for(final Subscription sub: subs) {
-                pool.execute(() -> sub.notifyOfEvent(e));
+                ServiceSubscription ss = (ServiceSubscription) sub;
+                e.addRoute(ss.getService(), ss.getOperation());
+                send(e);
             }
         }
-//        LOG.info("With name to filter on: " + m.getName());
+        LOG.info("With name to filter on: " + m.getName());
         final List<Subscription> filteredSubs = s.get(m.getName());
         if(filteredSubs == null || filteredSubs.size() == 0) {
-            LOG.fine("No subscriptions for filter: "+m.getName());
+            LOG.info("No subscriptions for filter: "+m.getName());
         } else {
-            LOG.fine("Notify all "+filteredSubs.size()+" filtered subscriptions.");
+            LOG.info("Notify all "+filteredSubs.size()+" filtered subscriptions.");
             for(final Subscription sub: filteredSubs) {
-                pool.execute(() -> sub.notifyOfEvent(e));
+                ServiceSubscription ss = (ServiceSubscription) sub;
+                e.addRoute(ss.getService(), ss.getOperation());
+                send(e);
             }
         }
     }
