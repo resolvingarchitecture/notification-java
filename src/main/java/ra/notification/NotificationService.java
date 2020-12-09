@@ -3,10 +3,8 @@ package ra.notification;
 import ra.common.*;
 import ra.common.messaging.EventMessage;
 import ra.common.messaging.MessageProducer;
-import ra.common.notification.ClientSubscription;
-import ra.common.notification.ServiceSubscription;
+import ra.common.network.ControlCommand;
 import ra.common.notification.Subscription;
-import ra.common.notification.SubscriptionRequest;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
 import ra.common.service.ServiceStatus;
@@ -51,8 +49,8 @@ public class NotificationService extends BaseService {
 
     private ExecutorService pool = Executors.newFixedThreadPool(4);
 
-    // Type, Filter, Subscription
-    private Map<String, Map<String, List<Subscription>>> subscriptions;
+    // Type, Filter, Subscription Id, Subscription
+    private Map<String, Map<String, Map<String, Subscription>>> subscriptions;
 
     public NotificationService() {
         super();
@@ -85,29 +83,39 @@ public class NotificationService extends BaseService {
 
     private void subscribe(Envelope e) {
         LOG.info("Received subscribe request...");
-        SubscriptionRequest r = (SubscriptionRequest) DLC.getData(SubscriptionRequest.class, e);
-        LOG.info("Subscription for type: " + r.getEventMessageType().name());
-        Map<String, List<Subscription>> s = subscriptions.get(r.getEventMessageType().name());
-        if (r.getFilter() == null) {
+        String eventMessageType = (String)e.getValue("EventMessageType");
+        LOG.info("Subscription for type: " + eventMessageType);
+        Map<String, Map<String,Subscription>> s = subscriptions.get(eventMessageType);
+        String filter = (String)e.getValue("Filter");
+        String clientId = (String)e.getValue("ClientId");
+        String service = (String)e.getValue("Service");
+        String operation = (String)e.getValue("Operation");
+        if (filter == null) {
             LOG.info("With no filters.");
-            s.get("|").add(r.getSubscription());
+            Subscription sub = new Subscription(EventMessage.Type.valueOf(eventMessageType), filter, service, operation);
+            sub.setClientId(clientId);
+            s.get("|").put(sub.getId(), sub);
         } else {
-            LOG.info("With filter: " + r.getFilter());
-            if (s.get(r.getFilter()) == null)
-                s.put(r.getFilter(), new ArrayList<>());
-            s.get(r.getFilter()).add(r.getSubscription());
+            LOG.info("With filter: " + filter);
+            if (s.get(filter) == null)
+                s.put(filter, new HashMap<>());
+            Subscription sub = new Subscription(EventMessage.Type.valueOf(eventMessageType), filter, service, operation);
+            sub.setClientId(clientId);
+            s.get(filter).put(sub.getId(), sub);
         }
         LOG.info("Subscription added.");
     }
 
     private void unsubscribe(Envelope e) {
         LOG.info("Received unsubscribe request...");
-        SubscriptionRequest r = (SubscriptionRequest)DLC.getData(SubscriptionRequest.class,e);
-        Map<String, List<Subscription>> s = subscriptions.get(r.getEventMessageType().name());
-        if(r.getFilter() == null) {
-            s.get("|").remove(r.getSubscription());
+        String subId = (String)e.getValue("Subscription.Id");
+        String eventMessageType = (String)e.getValue("EventMessageType");
+        Map<String, Map<String,Subscription>> s = subscriptions.get(eventMessageType);
+        String filter = (String)e.getValue("Filter");
+        if(filter == null) {
+            s.get("|").remove(subId);
         } else {
-            s.get(r.getFilter()).remove(r.getSubscription());
+            s.get(filter).remove(subId);
         }
         LOG.info("Subscription removed.");
     }
@@ -116,39 +124,49 @@ public class NotificationService extends BaseService {
         LOG.info("Received publish request...");
         EventMessage m = (EventMessage)e.getMessage();
         LOG.info("For type: "+m.getType());
-        Map<String, List<Subscription>> s = subscriptions.get(m.getType());
+        Map<String, Map<String,Subscription>> s = subscriptions.get(m.getType());
         if(s == null || s.size() == 0) {
             LOG.info("No subscriptions for type: "+m.getType());
             return;
         }
-        final List<Subscription> subs = s.get("|");
+        final Map<String,Subscription> subs = s.get("|");
         if(subs == null || subs.size() == 0) {
             LOG.info("No subscriptions without filters.");
         } else {
             LOG.info("Notify all "+subs.size()+" unfiltered subscriptions.");
-            for(final Subscription sub: subs) {
-                ServiceSubscription ss = (ServiceSubscription) sub;
-                e.addRoute(ss.getService(), ss.getOperation());
+            for(final Subscription sub: subs.values()) {
+                if(sub.getClientId()!=null) {
+                    e.setClient(sub.getClientId());
+                    e.setCommandPath(ControlCommand.Notify.name());
+                }
+                e.addRoute(sub.getService(), sub.getOperation());
+                e.ratchet();
                 send(e);
             }
         }
-        LOG.info("With name to filter on: " + m.getName());
-        final List<Subscription> filteredSubs = s.get(m.getName());
-        if(filteredSubs == null || filteredSubs.size() == 0) {
-            LOG.info("No subscriptions for filter: "+m.getName());
-        } else {
-            LOG.info("Notify all "+filteredSubs.size()+" filtered subscriptions.");
-            for(final Subscription sub: filteredSubs) {
-                ServiceSubscription ss = (ServiceSubscription) sub;
-                e.addRoute(ss.getService(), ss.getOperation());
-                send(e);
+        if(m.getName()!=null) {
+            LOG.info("With name to filter on: " + m.getName());
+            final Map<String, Subscription> filteredSubs = s.get(m.getName());
+            if (filteredSubs == null || filteredSubs.size() == 0) {
+                LOG.info("No subscriptions for filter: " + m.getName());
+            } else {
+                LOG.info("Notify all " + filteredSubs.size() + " filtered subscriptions.");
+                for (final Subscription sub : filteredSubs.values()) {
+                    if(sub.getClientId()!=null) {
+                        e.setClient(sub.getClientId());
+                        e.setCommandPath(ControlCommand.Notify.name());
+                    }
+                    e.addRoute(sub.getService(), sub.getOperation());
+                    e.ratchet();
+                    send(e);
+                }
             }
         }
     }
 
-    private Map<String, List<Subscription>> buildNewMap() {
-        List<Subscription> l = new ArrayList<>();
-        Map<String, List<Subscription>> m = new HashMap<>();
+    private Map<String, Map<String,Subscription>> buildNewMap() {
+        Map<String,Subscription> l = new HashMap<>();
+        Map<String, Map<String,Subscription>> m = new HashMap<>();
         m.put("|",l);
         return m;
     }
@@ -163,16 +181,12 @@ public class NotificationService extends BaseService {
         // For each EventMessage.Type, set a HashMap<String,Subscription>
         // and add a null filtered list for Subscriptions with no filters.
 
-        subscriptions.put(EventMessage.Type.JSON.name(), buildNewMap());
-        subscriptions.put(EventMessage.Type.HTML.name(), buildNewMap());
-        subscriptions.put(EventMessage.Type.EMAIL.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.EXCEPTION.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.ERROR.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.BUS_STATUS.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.PEER_STATUS.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.NETWORK_STATE_UPDATE.name(), buildNewMap());
         subscriptions.put(EventMessage.Type.SERVICE_STATUS.name(), buildNewMap());
-        subscriptions.put(EventMessage.Type.TEXT.name(), buildNewMap());
 
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
